@@ -298,7 +298,7 @@ contract MintableToken is StandardToken, Ownable {
 contract ArconaToken is MintableToken {
 
     string public constant name = "Arcona Distribution Contract";
-    string public constant symbol = "ARN";
+    string public constant symbol = "ARCONA";
     uint8 public constant decimals = 18;
    
     using SafeMath for uint;
