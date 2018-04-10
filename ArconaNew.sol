@@ -1,4 +1,4 @@
-pragma solidity ^0.4.17;
+pragma solidity ^0.4.21;
 
 /**
  * @title SafeMath
@@ -98,12 +98,13 @@ contract BasicToken is ERC20Basic {
   }
 
   // release time of freezed account
-  function releaseAt(address _owner) public constant returns (uint256 date) {
+  function checkReleaseAt(address _owner) public constant returns (uint256 date) {
     return releaseTime[_owner];
   }
 
   // change restricted releaseXX account
   function changeReleaseAccount(address _owner, address _newowner) internal returns (bool) {
+    require(balances[_newowner] == 0);
     require(releaseTime[_owner] != 0 );
     require(releaseTime[_newowner] == 0 );
     balances[_newowner] = balances[_owner];
@@ -130,38 +131,39 @@ contract BasicToken is ERC20Basic {
  */
 contract StandardToken is ERC20, BasicToken {
 
-  mapping (address => mapping (address => uint256)) allowed;
+  mapping (address => mapping (address => uint256)) internal allowed;
+
 
   /**
    * @dev Transfer tokens from one address to another
    * @param _from address The address which you want to send tokens from
    * @param _to address The address which you want to transfer to
-   * @param _value uint256 the amout of tokens to be transfered
+   * @param _value uint256 the amount of tokens to be transferred
    */
   function transferFrom(address _from, address _to, uint256 _value) public returns (bool) {
     require(mintingFinished);
-    uint allowance = allowed[_from][msg.sender];
-    require (_value <= allowance);
+    require(_to != address(0));
+    require(_value <= balances[_from]);
+    require(_value <= allowed[_from][msg.sender]);
 
-    balances[_to] = balances[_to].add(_value);
     balances[_from] = balances[_from].sub(_value);
-    allowed[_from][msg.sender] = allowance.sub(_value);
+    balances[_to] = balances[_to].add(_value);
+    allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
     emit Transfer(_from, _to, _value);
     return true;
   }
 
   /**
-   * @dev Aprove the passed address to spend the specified amount of tokens on behalf of msg.sender.
+   * @dev Approve the passed address to spend the specified amount of tokens on behalf of msg.sender.
+   *
+   * Beware that changing an allowance with this method brings the risk that someone may use both the old
+   * and the new allowance by unfortunate transaction ordering. One possible solution to mitigate this
+   * race condition is to first reduce the spender's allowance to 0 and set the desired value afterwards:
+   * https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729
    * @param _spender The address which will spend the funds.
    * @param _value The amount of tokens to be spent.
    */
-  function approve(address _spender, uint256 _value) public timeAllowed returns (bool) {
-    // To change the approve amount you first have to reduce the addresses`
-    //  allowance to zero by calling `approve(_spender, 0)` if it is not
-    //  already 0 to mitigate the race condition described here:
-    //  https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729
-    require((_value == 0) || (allowed[msg.sender][_spender] == 0));
-
+  function approve(address _spender, uint256 _value) public returns (bool) {
     allowed[msg.sender][_spender] = _value;
     emit Approval(msg.sender, _spender, _value);
     return true;
@@ -171,14 +173,50 @@ contract StandardToken is ERC20, BasicToken {
    * @dev Function to check the amount of tokens that an owner allowed to a spender.
    * @param _owner address The address which owns the funds.
    * @param _spender address The address which will spend the funds.
-   * @return A uint256 specifing the amount of tokens still available for the spender.
+   * @return A uint256 specifying the amount of tokens still available for the spender.
    */
-  function allowance(address _owner, address _spender) public constant returns (uint256 remaining) {
+  function allowance(address _owner, address _spender) public view returns (uint256) {
     return allowed[_owner][_spender];
   }
 
-}
+  /**
+   * @dev Increase the amount of tokens that an owner allowed to a spender.
+   *
+   * approve should be called when allowed[_spender] == 0. To increment
+   * allowed value is better to use this function to avoid 2 calls (and wait until
+   * the first transaction is mined)
+   * From MonolithDAO Token.sol
+   * @param _spender The address which will spend the funds.
+   * @param _addedValue The amount of tokens to increase the allowance by.
+   */
+  function increaseApproval(address _spender, uint _addedValue) public returns (bool) {
+    allowed[msg.sender][_spender] = allowed[msg.sender][_spender].add(_addedValue);
+    emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+    return true;
+  }
 
+  /**
+   * @dev Decrease the amount of tokens that an owner allowed to a spender.
+   *
+   * approve should be called when allowed[_spender] == 0. To decrement
+   * allowed value is better to use this function to avoid 2 calls (and wait until
+   * the first transaction is mined)
+   * From MonolithDAO Token.sol
+   * @param _spender The address which will spend the funds.
+   * @param _subtractedValue The amount of tokens to decrease the allowance by.
+   */
+  function decreaseApproval(address _spender, uint _subtractedValue) public returns (bool) {
+    uint oldValue = allowed[msg.sender][_spender];
+    if (_subtractedValue > oldValue) {
+      allowed[msg.sender][_spender] = 0;
+    } else {
+      allowed[msg.sender][_spender] = oldValue.sub(_subtractedValue);
+    }
+    emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+    return true;
+  }
+
+}
 /**
  * @title Ownable
  * @dev The Ownable contract has an owner address, and provides basic authorization control
@@ -261,7 +299,7 @@ contract ArconaToken is MintableToken {
 
     string public constant name = "Arcona Distribution Contract";
     string public constant symbol = "ARN";
-    uint32 public constant decimals = 18;
+    uint8 public constant decimals = 18;
    
     using SafeMath for uint;
     
@@ -292,9 +330,7 @@ contract ArconaToken is MintableToken {
 
     uint public startAuction;
     uint public finishAuction;
-
     uint public hardcap = 25*10**6; // USD
-
     uint public rateSale = 400*10**18; // 1ETH = 400 ARN
     uint public rateUSD = 500; // ETH Course in USD
 
@@ -313,11 +349,6 @@ contract ArconaToken is MintableToken {
 
     modifier isRegistered() {
         require (registered[msg.sender]);
-        _;
-    }
-
-    modifier saleIsOn() {
-        require(now > startSale && now < finishSale && !isGlobalPause);
         _;
     }
 
@@ -354,7 +385,6 @@ contract ArconaToken is MintableToken {
 
     function changeRestricted(address _new) public onlyOwner {
         if (isFinished) {
-            require(releaseAt(_new) == 0);
             changeReleaseAccount(restricted,_new);
         }
         restricted = _new;
@@ -363,12 +393,11 @@ contract ArconaToken is MintableToken {
     function proceedKYC(address _customer) public {
         require(msg.sender == registerbot || msg.sender == owner);
         require(_customer != address(0));
-	releaseAccount(_customer);
+       releaseAccount(_customer);
     }
 
     function changeRelease6m(address _new) public onlyOwner {
         if (isFinished) {
-            require(releaseAt(_new) == 0);
             changeReleaseAccount(release6m,_new);
         }
         release6m = _new;
@@ -376,7 +405,6 @@ contract ArconaToken is MintableToken {
 
     function changeRelease12m(address _new) public onlyOwner {
         if (isFinished) {
-            require(releaseAt(_new) == 0);
             changeReleaseAccount(release12m,_new);
         }
         release12m = _new;
@@ -384,7 +412,6 @@ contract ArconaToken is MintableToken {
 
     function changeRelease18m(address _new) public onlyOwner {
         if (isFinished) {
-            require(releaseAt(_new) == 0);
             changeReleaseAccount(release18m,_new);
         }
         release18m = _new;
@@ -428,10 +455,6 @@ contract ArconaToken is MintableToken {
         return ( registered[_customer], referral[_customer]);
     }
 
-    function checkReleaseAt(address _owner) public constant returns (uint256 date) {
-        return releaseAt(_owner);
-    }
-
     // import preICO customers from 0x516130856e743090af9d7fd95d6fc94c8743a4e1
     function importCustomer(address _customer, address _referral, uint _tokenAmount) public {
         require(msg.sender == registerbot || msg.sender == owner);
@@ -449,7 +472,7 @@ contract ArconaToken is MintableToken {
         require(_customer!= address(0));
         delete registered[_customer];
         delete referral[_customer];
-        // return Wei && Drain tokens
+        // Drain tokens
         unMint(_customer);
     }
 
@@ -478,7 +501,7 @@ contract ArconaToken is MintableToken {
         require(_startAuction < _finishAuction);
         require(_auctionPercent > 0);
         require(_startAuction > startSale);
-        require(_finishAuction > finishSale);
+        require(_finishAuction <= finishSale);
         finishAuction = _finishAuction;
         startAuction = _startAuction;
         auctionPercent = _auctionPercent;
@@ -505,36 +528,16 @@ contract ArconaToken is MintableToken {
         require(_rate > 0);
         return _rate.mul(_weiAmount).div(1 ether);
     }
-
-    function foreignBuy(address _holder, uint256 _weiAmount, uint256 _rate) public onlyOwner {
+    
+    // BTC external payments
+    function foreignBuy(address _holder, uint256 _weiAmount, uint256 _rate) public {
+        require(msg.sender == registerbot || msg.sender == owner);
         require(_weiAmount > 0);
         require(_rate > 0);
         registered[_holder] = true;
         uint tokens = _rate.mul(_weiAmount).div(1 ether);
         mint(_holder, tokens, now + 99 * 1 years); // till KYC is completed
         totalWeiSale = totalWeiSale.add(_weiAmount);
-    }
-
-    function currentPercent() public view anySaleIsOn isUnderHardCap returns (uint amount){
-        uint percent = 0;
-        uint finishBonus = startSale + (bonusPeriod * 1 days);
-        if ( now < finishBonus ) {
-           if ( now <= startSale + 1 days ) {
-              percent = first24Percent;   // 1st day: 50% (for registered whitelist only)
-           } else {	// 25% total:
-             percent = (finishBonus - now).div(1 days); // last 15days -1% every day
-             if ( percent >= 15 ) {  //  first 5days, -1% every 12h
-                percent = 27 - (now - startSale).div(1 hours).div(12);
-             } else {
-                percent = percent.add(1);
-             }				
-          }
-        } else {
-            if ( now >= startAuction && now < finishAuction ) {
-                percent = auctionPercent;
-            }
-        }
-		return percent;	
     }
 
     function createTokens() public isRegistered anySaleIsOn isUnderHardCap payable {
